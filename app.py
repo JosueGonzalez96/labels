@@ -1,7 +1,30 @@
-from reportlab.pdfbase.pdfmetrics import stringWidth
+import streamlit as st
+import pandas as pd
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
+from reportlab.lib.units import cm
+import datetime
+import io
+
+def limpiar_dato(valor):
+    if pd.isna(valor) or str(valor).strip().lower() == "nan":
+        return ""
+    if isinstance(valor, (datetime.datetime, pd.Timestamp)):
+        return valor.strftime('%d/%m/%Y')
+    val_str = str(valor).strip()
+    if " 00:00:00" in val_str:
+        val_str = val_str.replace(" 00:00:00", "")
+    return val_str
+
+def es_precio(valor):
+    try:
+        v = str(valor).replace('$', '').strip()
+        if not v or "/" in v or "-" in v: return False
+        float(v)
+        return True
+    except: return False
 
 def generar_pdf(df):
-    """Genera PDF con ajuste de fuente milimétrico para que NADA se corte."""
     buffer = io.BytesIO()
     c = canvas.Canvas(buffer, pagesize=letter)
     width, height = letter
@@ -9,12 +32,9 @@ def generar_pdf(df):
     cols = 5
     margin_x, margin_y = 0.5 * cm, 1.0 * cm
     label_w, label_h = (width - 2 * margin_x) / cols, 2.8 * cm
-    
-    # Área útil para el texto (dejando márgenes internos)
-    usable_width = label_w - 0.4 * cm 
-    
     x, y = margin_x, height - margin_y - label_h
     
+    # Identificar columnas por posición (1: Medicamento, 2: 100%, 3: 85%)
     col_med, col_100, col_85 = df.columns[1], df.columns[2], df.columns[3]
 
     for i, row in df.iterrows():
@@ -24,77 +44,62 @@ def generar_pdf(df):
         p100 = limpiar_dato(row[col_100])
         p85 = limpiar_dato(row[col_85])
 
-        # Dibujar recuadro
+        # Dibujar Cuadro
         c.setLineWidth(0.3)
         c.rect(x, y, label_w, label_h)
         
-        # --- LÓGICA DE AJUSTE AUTOMÁTICO (AUTOSIZE) ---
-        font_name = "Helvetica-Bold"
-        max_font_size = 8.5  # Tamaño ideal para nombres cortos
-        min_font_size = 4.5  # Lo mínimo legal antes de que sea ilegible
+        # --- AJUSTE DE TEXTO SIN CORTES ---
+        # Si el nombre es muy largo, achicamos la letra
+        if len(nombre) > 50: f_size = 5.5
+        elif len(nombre) > 35: f_size = 6.5
+        else: f_size = 8
         
-        current_font_size = max_font_size
+        c.setFont("Helvetica-Bold", f_size)
         
-        # Función para probar si el texto cabe en un tamaño dado
-        def intentar_ajuste(texto, size):
-            palabras = texto.split()
-            lineas = []
-            linea_actual = ""
-            for p in palabras:
-                test_linea = f"{linea_actual} {p}".strip()
-                # Calculamos el ancho real que ocuparía el texto en puntos
-                ancho_test = stringWidth(test_linea, font_name, size)
-                if ancho_test <= usable_width:
-                    linea_actual = test_linea
-                else:
-                    lineas.append(linea_actual)
-                    linea_actual = p
-            lineas.append(linea_actual)
-            return lineas
+        # Dividir en palabras y crear líneas
+        palabras = nombre.split()
+        lineas = []
+        linea_act = ""
+        limite_chars = 25 if f_size < 7 else 20
+        
+        for p in palabras:
+            if len(linea_act + p) <= limite_chars:
+                linea_act += p + " "
+            else:
+                lineas.append(linea_act.strip())
+                linea_act = p + " "
+        lineas.append(linea_act.strip())
 
-        # Bucle para reducir la letra hasta que el texto quepa en máximo 3 líneas
-        while current_font_size > min_font_size:
-            lineas_propuestas = intentar_ajuste(nombre, current_font_size)
-            if len(lineas_propuestas) <= 3:
-                break
-            current_font_size -= 0.5
-
-        # Dibujar las líneas calculadas
-        c.setFont(font_name, current_font_size)
-        y_texto = y + label_h - (0.4 * cm) # Punto de inicio
-        for linea in lineas_propuestas[:3]: # Aseguramos que no pase de 3
-            c.drawCentredString(x + label_w/2, y_texto, linea)
-            y_texto -= (current_font_size + 1.5)
+        # Dibujar líneas (máximo 3 para no chocar con precios)
+        y_txt = y + label_h - 12
+        for linea in lineas[:3]:
+            c.drawCentredString(x + label_w/2, y_txt, linea)
+            y_txt -= (f_size + 2)
 
         # --- ÁREA DE PRECIOS ---
-        c.setLineWidth(0.3)
         c.line(x, y + 28, x + label_w, y + 28)
         c.line(x + label_w/2, y, x + label_w/2, y + 28)
         
-        c.setFont("Helvetica", 5.5)
-        c.drawString(x + 4, y + 20, "NORMAL")
-        c.drawString(x + label_w/2 + 4, y + 20, "OFERTA/VENCE")
+        c.setFont("Helvetica", 5)
+        c.drawString(x + 4, y + 21, "NORMAL")
+        c.drawString(x + label_w/2 + 4, y + 21, "OFERTA/VENCE")
 
-        # Precio 100%
+        # Precio Normal
         c.setFont("Helvetica-Bold", 10)
         c.setFillColorRGB(0, 0, 0)
-        txt_100 = f"${p100}" if es_precio(p100) else p100
-        c.drawString(x + 4, y + 7, txt_100)
+        c.drawString(x + 4, y + 8, f"${p100}" if es_precio(p100) else p100)
         
-        # Precio 85% o Fecha
+        # Precio Oferta o Fecha (Rojo)
         c.setFillColorRGB(0.8, 0, 0)
         if es_precio(p85):
             c.setFont("Helvetica-Bold", 11)
-            c.drawString(x + label_w/2 + 4, y + 7, f"${p85}")
+            c.drawString(x + label_w/2 + 4, y + 8, f"${p85}")
         else:
-            # También ajustamos el tamaño de la fecha si es muy larga
-            size_fecha = 7.5 if len(p85) < 12 else 6
-            c.setFont("Helvetica-Bold", size_fecha)
-            c.drawCentredString(x + (label_w * 0.75), y + 7, p85)
-        
+            c.setFont("Helvetica-Bold", 7)
+            c.drawCentredString(x + (label_w * 0.75), y + 8, p85)
         c.setFillColorRGB(0, 0, 0)
 
-        # Control de cuadrícula
+        # Posicionamiento
         if (i + 1) % cols == 0:
             x = margin_x
             y -= label_h
@@ -107,3 +112,26 @@ def generar_pdf(df):
     c.save()
     buffer.seek(0)
     return buffer
+
+# --- INTERFAZ STREAMLIT ---
+st.set_page_config(page_title="Etiquetas Farmacia", page_icon="💊")
+st.title("💊 Generador de Etiquetas")
+
+with st.expander("📖 Instrucciones"):
+    st.write("Asegúrate de que tu archivo tenga este orden: Stock, Medicamento, Precio, Oferta.")
+
+archivo = st.file_uploader("Sube tu Excel o CSV", type=["xlsx", "csv"])
+
+if archivo:
+    try:
+        if archivo.name.endswith('.csv'):
+            df = pd.read_csv(archivo)
+        else:
+            df = pd.read_excel(archivo)
+        
+        st.success("Archivo listo")
+        if st.button("🚀 Generar PDF"):
+            pdf_data = generar_pdf(df)
+            st.download_button("📥 Descargar PDF", pdf_data, "Etiquetas.pdf", "application/pdf")
+    except Exception as e:
+        st.error(f"Error: {e}")
