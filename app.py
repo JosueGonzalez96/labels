@@ -139,7 +139,7 @@ with st.expander("📖 ¿Cómo preparar mi archivo?"):
     ### 3. Ejemplo de datos
     | Stock | Medicamento | 100% | 85% |
     | :--- | :--- | :--- | :--- |
-    | 10 | Ácido Acetilsalicílico | 30 | 25/05/2026 |
+    | 10 | Ácido Acetilsalicílico | 30 | 25.5 |
     | 5 | Paracetamol 500mg | 50 | 42 |
     """)
 
