@@ -131,7 +131,7 @@ with st.expander("📖 ¿Cómo preparar mi archivo?"):
     - **A:** Stock (Se ignora)
     - **B:** Nombre del Medicamento
     - **C:** Precio Normal
-    - **D:** Precio Oferta o Fecha de Vencimiento
+    - **D:** Precio Oferta
     
     ### 2. Guardar desde Excel
     Para mejores resultados, guarda como **CSV UTF-8 (delimitado por comas)**.
