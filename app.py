@@ -3,10 +3,11 @@ import pandas as pd
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 from reportlab.lib.units import cm
+from reportlab.pdfbase.pdfmetrics import stringWidth
 import datetime
 import io
 
-# --- FUNCIONES DE SOPORTE ---
+# --- FUNCIONES DE LIMPIEZA ---
 def limpiar_dato(valor):
     if pd.isna(valor) or str(valor).strip().lower() == "nan":
         return ""
@@ -27,113 +28,124 @@ def es_precio(valor):
 
 def generar_pdf(df):
     buffer = io.BytesIO()
-    try:
-        c = canvas.Canvas(buffer, pagesize=letter)
-        width, height = letter
+    c = canvas.Canvas(buffer, pagesize=letter)
+    width, height = letter
+    
+    # Configuración de etiquetas (5 columnas por hoja)
+    cols = 5
+    margin_x, margin_y = 0.5 * cm, 1.0 * cm
+    label_w, label_h = (width - 2 * margin_x) / cols, 2.8 * cm
+    
+    # Margen interno de seguridad para que el nombre no toque los bordes
+    padding = 0.15 * cm
+    usable_w = label_w - (padding * 2)
+    
+    x, y = margin_x, height - margin_y - label_h
+    col_med, col_100, col_85 = df.columns[1], df.columns[2], df.columns[3]
+
+    for i, row in df.iterrows():
+        nombre = str(row[col_med]).strip()
+        if nombre.lower() == "nan" or not nombre: continue
+
+        p100, p85 = limpiar_dato(row[col_100]), limpiar_dato(row[col_85])
+
+        # Dibujar Cuadro Exterior
+        c.setLineWidth(0.3)
+        c.rect(x, y, label_w, label_h)
         
-        cols = 5
-        margin_x, margin_y = 0.5 * cm, 1.0 * cm
-        label_w, label_h = (width - 2 * margin_x) / cols, 2.8 * cm
-        x, y = margin_x, height - margin_y - label_h
+        # --- MOTOR DE AJUSTE AUTOMÁTICO DE NOMBRE ---
+        font_name = "Helvetica-Bold"
+        current_size = 8.5  # Tamaño máximo
+        min_size = 4.5      # Tamaño mínimo para nombres extremadamente largos
         
-        # Columnas por posición (1: Medicamento, 2: 100%, 3: 85%)
-        col_med, col_100, col_85 = df.columns[1], df.columns[2], df.columns[3]
-
-        for i, row in df.iterrows():
-            try:
-                nombre = str(row[col_med]).strip()
-                if nombre.lower() == "nan" or not nombre: continue
-
-                p100 = limpiar_dato(row[col_100])
-                p85 = limpiar_dato(row[col_85])
-
-                # Dibujar Cuadro
-                c.setLineWidth(0.3)
-                c.rect(x, y, label_w, label_h)
-                
-                # --- AJUSTE DE TEXTO GARANTIZADO ---
-                # Determinamos el tamaño de fuente según el largo total
-                largo = len(nombre)
-                if largo > 60: f_size = 5
-                elif largo > 45: f_size = 6
-                elif largo > 30: f_size = 7
-                else: f_size = 8.5
-                
-                c.setFont("Helvetica-Bold", f_size)
-                
-                # Partir el texto en líneas de máximo N caracteres
-                # (Ajuste empírico: a menor fuente, caben más caracteres)
-                chars_por_linea = int(140 / f_size) 
-                
-                palabras = nombre.split()
-                lineas = []
-                linea_act = ""
-                
-                for p in palabras:
-                    if len(linea_act + p) <= chars_por_linea:
-                        linea_act += p + " "
-                    else:
-                        lineas.append(linea_act.strip())
-                        linea_act = p + " "
-                lineas.append(linea_act.strip())
-
-                # Dibujar las líneas (centradas)
-                y_txt = y + label_h - (0.4 * cm)
-                for linea in lineas[:3]: # Máximo 3 líneas
-                    # Si una sola palabra es más larga que el límite, la forzamos a cortarse
-                    if len(linea) > chars_por_linea:
-                        linea = linea[:chars_por_linea-2] + ".."
-                    c.drawCentredString(x + label_w/2, y_txt, linea)
-                    y_txt -= (f_size + 2)
-
-                # --- ÁREA DE PRECIOS ---
-                c.line(x, y + 28, x + label_w, y + 28)
-                c.line(x + label_w/2, y, x + label_w/2, y + 28)
-                
-                c.setFont("Helvetica", 5)
-                c.drawString(x + 4, y + 21, "NORMAL")
-                c.drawString(x + label_w/2 + 4, y + 21, "OFERTA/VENCE")
-
-                # Precio Normal
-                c.setFont("Helvetica-Bold", 10)
-                c.setFillColorRGB(0, 0, 0)
-                txt_100 = f"${p100}" if es_precio(p100) else p100
-                c.drawString(x + 4, y + 8, txt_100)
-                
-                # Precio Oferta o Fecha (Rojo)
-                c.setFillColorRGB(0.8, 0, 0)
-                if es_precio(p85):
-                    c.setFont("Helvetica-Bold", 11)
-                    c.drawString(x + label_w/2 + 4, y + 8, f"${p85}")
+        # Función para repartir texto en líneas según ancho
+        def preparar_lineas(txt, size):
+            palabras = txt.split()
+            lineas_res = []
+            linea_act = ""
+            for p in palabras:
+                test = f"{linea_act} {p}".strip()
+                if stringWidth(test, font_name, size) <= usable_w:
+                    linea_act = test
                 else:
-                    c.setFont("Helvetica-Bold", 7)
-                    c.drawCentredString(x + (label_w * 0.75), y + 8, p85)
-                c.setFillColorRGB(0, 0, 0)
+                    if linea_act: lineas_res.append(linea_act)
+                    linea_act = p
+            lineas_res.append(linea_act)
+            return lineas_res
 
-                # Posicionamiento
-                if (i + 1) % cols == 0:
-                    x = margin_x
-                    y -= label_h
-                else: x += label_w
-                    
-                if y < margin_y:
-                    c.showPage()
-                    x, y = margin_x, height - margin_y - label_h
-            except:
-                continue # Si una etiqueta falla, saltar a la siguiente
+        # Reducir letra hasta que el nombre quepa en el ancho y en máximo 3 líneas
+        while current_size > min_size:
+            lineas = preparar_lineas(nombre, current_size)
+            # Verificamos si la palabra más larga cabe sola
+            max_p_width = max([stringWidth(p, font_name, current_size) for p in nombre.split()])
+            if max_p_width <= usable_w and len(lineas) <= 3:
+                break
+            current_size -= 0.3
 
-        c.save()
-        buffer.seek(0)
-        return buffer
-    except Exception as e:
-        st.error(f"Error crítico: {e}")
-        return None
+        # Escribir nombre (centrado)
+        c.setFont(font_name, current_size)
+        y_txt = y + label_h - (0.45 * cm)
+        for linea in lineas[:3]:
+            c.drawCentredString(x + label_w/2, y_txt, linea)
+            y_txt -= (current_size + 1.2)
 
-# --- INTERFAZ ---
+        # --- ÁREA DE PRECIOS ---
+        c.setLineWidth(0.3)
+        c.line(x, y + 28, x + label_w, y + 28) # Línea horizontal
+        c.line(x + label_w/2, y, x + label_w/2, y + 28) # Línea vertical divisoria
+        
+        c.setFont("Helvetica", 5.5)
+        c.drawString(x + 4, y + 21, "NORMAL")
+        c.drawString(x + label_w/2 + 4, y + 21, "OFERTA/VENCE")
+
+        # Precio Normal
+        c.setFont("Helvetica-Bold", 10)
+        c.setFillColorRGB(0, 0, 0)
+        c.drawString(x + 4, y + 8, f"${p100}" if es_precio(p100) else p100)
+        
+        # Oferta / Fecha (Rojo)
+        c.setFillColorRGB(0.8, 0, 0)
+        if es_precio(p85):
+            c.setFont("Helvetica-Bold", 11)
+            c.drawString(x + label_w/2 + 4, y + 8, f"${p85}")
+        else:
+            # Ajuste de tamaño para fechas largas
+            f_size = 7 if len(p85) < 12 else 5.5
+            c.setFont("Helvetica-Bold", f_size)
+            c.drawCentredString(x + (label_w * 0.75), y + 8, p85)
+        
+        c.setFillColorRGB(0, 0, 0) # Reset color
+
+        # Salto de etiqueta
+        if (i + 1) % cols == 0:
+            x = margin_x
+            y -= label_h
+        else: x += label_w
+            
+        if y < margin_y:
+            c.showPage()
+            x, y = margin_x, height - margin_y - label_h
+
+    c.save()
+    buffer.seek(0)
+    return buffer
+
+# --- INTERFAZ STREAMLIT ---
 st.set_page_config(page_title="Etiquetas Farmacia", page_icon="💊")
-st.title("💊 Generador de Etiquetas")
+st.title("💊 Generador de Etiquetas Profesional")
 
-archivo = st.file_uploader("Sube tu Excel o CSV", type=["xlsx", "csv"])
+# Restablecemos el Tutorial
+with st.expander("📖 ¿Cómo preparar mi archivo?"):
+    st.markdown("""
+    ### Pasos rápidos:
+    1. Asegúrate de que las columnas estén en este orden: **Stock, Nombre, Precio 100%, Precio 85%**.
+    2. Si usas Excel, guárdalo como **CSV UTF-8** para que los acentos se vean bien.
+    3. Si pones fechas de vencimiento en la última columna, el sistema las detectará automáticamente.
+    """)
+
+st.write("Selecciona tu archivo de medicamentos para generar el PDF listo para imprimir:")
+
+archivo = st.file_uploader("Subir archivo Excel o CSV", type=["xlsx", "csv"])
 
 if archivo:
     try:
@@ -142,10 +154,20 @@ if archivo:
         else:
             df = pd.read_excel(archivo)
         
-        st.success("Archivo cargado")
-        if st.button("🚀 Generar PDF"):
-            res = generar_pdf(df)
-            if res:
-                st.download_button("📥 Descargar PDF", res, "Etiquetas.pdf", "application/pdf")
+        st.success("✨ ¡Archivo cargado con éxito! Hemos verificado tus datos.")
+        st.dataframe(df.head(3), use_container_width=True) # Vista previa
+
+        if st.button("🚀 Generar Etiquetas"):
+            with st.spinner("Ajustando nombres y creando PDF..."):
+                pdf_data = generar_pdf(df)
+                if pdf_data:
+                    st.balloons()
+                    st.download_button(
+                        label="📥 Descargar PDF para Imprimir",
+                        data=pdf_data,
+                        file_name="Etiquetas_Anaquel.pdf",
+                        mime="application/pdf"
+                    )
+                    st.info("El PDF se generó con ajuste automático de texto para que nada se corte.")
     except Exception as e:
-        st.error(f"Error al leer archivo: {e}")
+        st.error(f"Ocurrió un error al leer el archivo: {e}")
